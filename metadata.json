@@ -1,0 +1,5 @@
+{
+  "name": "Idle Slayer Roulette Predictor",
+  "description": "A high-precision roulette simulator and statistical predictor tailored for Idle Slayer mechanics. Powered by a native Rust core for instant analysis and using cryptographically secure random number generation (CSPRNG).",
+  "requestFramePermissions": []
+}

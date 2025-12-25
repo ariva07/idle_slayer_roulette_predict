@@ -1,0 +1,27 @@
+{
+  "name": "idle-slayer-roulette-predictor",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build:web": "vite build",
+    "build": "tauri build",
+    "tauri": "tauri",
+    "clean": "rm -rf node_modules dist src-tauri/target",
+    "reinstall": "npm run clean && npm install",
+    "rebuild": "npm run reinstall && npm run build"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.9.1",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.9.6",
+    "@types/node": "^22.14.0",
+    "@vitejs/plugin-react": "^5.0.0",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
+  }
+}
