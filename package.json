@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "tauri dev",
+    "vite": "vite",
     "build:web": "vite build",
     "build": "tauri build",
     "tauri": "tauri",
-    "clean": "rm -rf node_modules dist src-tauri/target",
+    "clean": "rm -rf dist src-tauri/target",
+    "mrproper": "rm -rf node_modules dist src-tauri/target",
     "reinstall": "npm run clean && npm install",
     "rebuild": "npm run reinstall && npm run build"
   },

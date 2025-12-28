@@ -9,6 +9,10 @@ export default defineConfig(({ mode }) => {
       server: {
         port: 3000,
         host: '0.0.0.0',
+        watch: {
+          // Dodaj tę sekcję: Ignoruj pliki tymczasowe Vima
+          ignored: ['**/*.swp', '**/*.swo', '**/*.swn', '**/*~', '**/.git/**'],
+        },
       },
       plugins: [react()],
       define: {

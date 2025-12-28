@@ -1,8 +1,7 @@
-import React, { useState, useCallback, useMemo } from 'react';
-// Zmiana dla Tauri v2 - importujemy invoke do komunikacji z Rustem
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { SpinResult, RouletteStats, RouletteColor } from './types';
-import { spinWheel } from './utils/random';
+import { spinWheel, getRouletteColor } from './utils/random';
 import { HistoryTable } from './components/HistoryTable';
 import { StatsPanel } from './components/StatsPanel';
 
@@ -13,6 +12,41 @@ const App: React.FC = () => {
   const [aiPrediction, setAiPrediction] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [manualValue, setManualValue] = useState<string>('');
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // --- 1. ŁADOWANIE DANYCH PRZY STARCIE ---
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const savedHistory = await invoke<SpinResult[]>('load_history');
+        if (savedHistory && savedHistory.length > 0) {
+          // Sortowanie malejąco po timestamp (najnowsze na górze)
+          savedHistory.sort((a, b) => b.timestamp - a.timestamp);
+          setHistory(savedHistory);
+          setLastSpin(savedHistory[0]);
+          getAiPrediction(savedHistory);
+        }
+      } catch (err) {
+        console.error("Failed to load history:", err);
+      } finally {
+        setIsLoaded(true);
+      }
+    };
+    loadData();
+  }, []);
+
+  // --- 2. AUTOMATYCZNY ZAPIS PRZY ZMIANIE ---
+  useEffect(() => {
+    if (!isLoaded) return;
+    const saveData = async () => {
+      try {
+        await invoke('save_history', { history });
+      } catch (err) {
+        console.error("Failed to save history:", err);
+      }
+    };
+    saveData();
+  }, [history, isLoaded]);
 
   const stats = useMemo<RouletteStats>(() => {
     const s = { redCount: 0, blackCount: 0, greenCount: 0, totalSpins: history.length };
@@ -24,24 +58,22 @@ const App: React.FC = () => {
     return s;
   }, [history]);
 
-  // --- NOWA FUNKCJA PREDYKCJI (RUST BACKEND) ---
+  // --- PREDYKCJA (RUST BACKEND) ---
   const getAiPrediction = async (currentHistory: SpinResult[]) => {
-    // Nie analizujemy, jeśli już liczy lub jest za mało danych
-    if (isAnalyzing || currentHistory.length < 3) return;
-    
-    setIsAnalyzing(true);
-    
-    try {
-      // Wywołujemy funkcję "predict_next_move" zdefiniowaną w main.rs
-      // Przekazujemy historię jako argument
-      const prediction = await invoke<string>('predict_next_move', { 
-        history: currentHistory 
-      });
+    if (currentHistory.length < 3) {
+      setAiPrediction(null);
+      return;
+    }
 
+    setIsAnalyzing(true);
+    try {
+      const prediction = await invoke<string>('predict_next_move', {
+        history: currentHistory
+      });
       setAiPrediction(prediction);
     } catch (err) {
-      console.error("Rust communication error:", err);
-      setAiPrediction("Error: Could not calculate prediction. Check console.");
+      console.error("Rust prediction error:", err);
+      setAiPrediction("Algorithm error.");
     } finally {
       setIsAnalyzing(false);
     }
@@ -49,49 +81,84 @@ const App: React.FC = () => {
 
   const handleSpin = useCallback(() => {
     setIsSpinning(true);
-    // Symulujemy czas kręcenia koła
     setTimeout(() => {
       const result = spinWheel();
       setLastSpin(result);
-      
+
       const newHistory = [result, ...history];
       setHistory(newHistory);
       setIsSpinning(false);
-      
-      // Wywołujemy predykcję co spin (jeśli mamy dość danych)
-      if (newHistory.length >= 3) {
-        getAiPrediction(newHistory);
-      }
+
+      if (newHistory.length >= 3) getAiPrediction(newHistory);
     }, 1200);
   }, [history]);
 
-  const handleManualEntry = (color: RouletteColor) => {
+  // --- OBSŁUGA RĘCZNA (AUTO KOLOR) ---
+  const handleManualSubmit = () => {
     const val = parseInt(manualValue);
-    // Logika przypisania wartości dla przycisków kolorów
-    const finalValue = isNaN(val) ? (color === 'GREEN' ? 0 : color === 'RED' ? 1 : 2) : val;
-    
+
+    // Walidacja: Ignorujemy puste, nieliczby oraz wartości spoza zakresu gry (0-14)
+    if (isNaN(val) || val < 0 || val > 14) {
+      return;
+    }
+
+    // Automatyczne ustalenie koloru na podstawie logiki gry (1-7 Red, 8-14 Black)
+    const calculatedColor = getRouletteColor(val);
+
     const result: SpinResult = {
       id: Math.random().toString(36).substr(2, 9),
       timestamp: Date.now(),
-      value: finalValue,
-      color: color,
+      value: val,
+      color: calculatedColor,
     };
 
     const newHistory = [result, ...history];
     setHistory(newHistory);
     setLastSpin(result);
     setManualValue('');
-    
-    // Automatyczna predykcja po dodaniu ręcznym
-    if (newHistory.length >= 3) {
-      getAiPrediction(newHistory);
+
+    if (newHistory.length >= 3) getAiPrediction(newHistory);
+  };
+
+  // --- KOREKTA HISTORII (EDYCJA) ---
+  const handleUpdateSpin = (id: string, newValue: number) => {
+    // Automatycznie przeliczamy kolor dla nowej wartości
+    const newColor = getRouletteColor(newValue);
+
+    const newHistory = history.map(spin => {
+      if (spin.id === id) {
+        return { ...spin, value: newValue, color: newColor };
+      }
+      return spin;
+    });
+
+    setHistory(newHistory);
+
+    // Jeśli edytowaliśmy najnowszy wpis, aktualizujemy też "Last Spin" na ekranie
+    if (newHistory.length > 0 && newHistory[0].id === id) {
+      setLastSpin(newHistory[0]);
     }
+
+    getAiPrediction(newHistory);
+  };
+
+  const handleDeleteSpin = (id: string) => {
+    const newHistory = history.filter(spin => spin.id !== id);
+    setHistory(newHistory);
+    if (newHistory.length > 0) {
+      setLastSpin(newHistory[0]);
+    } else {
+      setLastSpin(null);
+    }
+    getAiPrediction(newHistory);
   };
 
   const clearHistory = () => {
-    setHistory([]);
-    setLastSpin(null);
-    setAiPrediction(null);
+    if(confirm("Are you sure you want to clear all data? This cannot be undone.")) {
+      setHistory([]);
+      setLastSpin(null);
+      setAiPrediction(null);
+    }
   };
 
   return (
@@ -121,13 +188,13 @@ const App: React.FC = () => {
               ) : lastSpin ? (
                 <>
                   <div className={`text-6xl md:text-7xl font-black mono drop-shadow-lg ${
-                    lastSpin.color === 'RED' ? 'text-red-500' : 
+                    lastSpin.color === 'RED' ? 'text-red-500' :
                     lastSpin.color === 'BLACK' ? 'text-zinc-300' : 'text-green-500'
                   }`}>
                     {lastSpin.value}
                   </div>
                   <div className={`text-xs font-bold mt-1 uppercase tracking-widest opacity-60 ${
-                    lastSpin.color === 'RED' ? 'text-red-400' : 
+                    lastSpin.color === 'RED' ? 'text-red-400' :
                     lastSpin.color === 'BLACK' ? 'text-zinc-400' : 'text-green-400'
                   }`}>
                     {lastSpin.color}
@@ -144,8 +211,8 @@ const App: React.FC = () => {
               onClick={handleSpin}
               disabled={isSpinning}
               className={`w-full py-4 rounded-xl font-bold text-lg transition-all active:scale-95 shadow-lg border-b-4 ${
-                isSpinning 
-                  ? 'bg-zinc-800 text-zinc-600 border-zinc-900 cursor-not-allowed' 
+                isSpinning
+                  ? 'bg-zinc-800 text-zinc-600 border-zinc-900 cursor-not-allowed'
                   : 'bg-indigo-600 hover:bg-indigo-500 text-white border-indigo-800 shadow-indigo-500/20'
               }`}
             >
@@ -158,48 +225,39 @@ const App: React.FC = () => {
                 <h3 className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Sync Game Data</h3>
                 <button onClick={clearHistory} className="text-[10px] text-zinc-600 hover:text-red-400 transition-colors uppercase font-bold">Clear All</button>
               </div>
-              
+
               <div className="flex flex-col gap-4">
                 <div className="flex gap-2">
-                  <input 
-                    type="number" 
-                    placeholder="Val (0-36)" 
+                  <input
+                    type="number"
+                    min="0"
+                    max="14"
+                    placeholder="Val (0-14)"
                     value={manualValue}
                     onChange={(e) => setManualValue(e.target.value)}
+                    // Obsługa klawisza Enter dla szybkiego wprowadzania
+                    onKeyDown={(e) => { if(e.key === 'Enter') handleManualSubmit() }}
                     className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm mono text-zinc-200 focus:outline-none focus:border-indigo-500 transition-colors"
                   />
-                  <div className="flex gap-1">
-                    <button 
-                      onClick={() => handleManualEntry('RED')}
-                      className="w-10 h-10 rounded-lg bg-red-600 hover:bg-red-500 border-b-2 border-red-800 flex items-center justify-center text-white transition-all active:translate-y-0.5"
-                    >
-                      <div className="w-4 h-4 rounded-full bg-white/20" />
-                    </button>
-                    <button 
-                      onClick={() => handleManualEntry('BLACK')}
-                      className="w-10 h-10 rounded-lg bg-zinc-700 hover:bg-zinc-600 border-b-2 border-zinc-900 flex items-center justify-center text-white transition-all active:translate-y-0.5"
-                    >
-                      <div className="w-4 h-4 rounded-full bg-black/40" />
-                    </button>
-                    <button 
-                      onClick={() => handleManualEntry('GREEN')}
-                      className="w-10 h-10 rounded-lg bg-green-600 hover:bg-green-500 border-b-2 border-green-800 flex items-center justify-center text-white transition-all active:translate-y-0.5"
-                    >
-                      <div className="w-4 h-4 rounded-full bg-white/30" />
-                    </button>
-                  </div>
+                  <button
+                    onClick={handleManualSubmit}
+                    disabled={manualValue === ''}
+                    className="px-6 rounded-lg bg-indigo-600 hover:bg-indigo-500 border-b-2 border-indigo-800 flex items-center justify-center text-white font-bold text-xs transition-all active:translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    SYNC
+                  </button>
                 </div>
                 <p className="text-[10px] text-zinc-600 leading-tight">
-                  Enter the last results from your Idle Slayer session to calibrate the algorithm.
+                  Enter the exact number. Color is automatically determined (1-7 Red, 8-14 Black).
                 </p>
               </div>
             </div>
           </div>
 
-          {/* Statistical Analysis Output (Zmienione na styl terminalowy) */}
+          {/* Statistical Analysis Output */}
           <div className="bg-zinc-900/80 border border-zinc-700 rounded-xl p-4 min-h-[90px] flex flex-col justify-center relative overflow-hidden shadow-inner">
             <div className="absolute top-0 right-0 w-32 h-32 bg-green-500/5 rounded-full -mr-10 -mt-10 blur-3xl" />
-            
+
             <div className="flex items-center justify-between mb-2 relative z-10">
               <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${isAnalyzing ? 'bg-yellow-500 animate-ping' : aiPrediction ? 'bg-green-500' : 'bg-zinc-600'}`} />
@@ -238,9 +296,15 @@ const App: React.FC = () => {
             <StatsPanel stats={stats} />
           </section>
 
-          <section className="flex-1">
-            <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3">Audit Log</h2>
-            <HistoryTable history={history} />
+          <section className="flex-1 min-h-0 flex flex-col">
+            <h2 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-3">Audit Log (Click to Edit)</h2>
+            <div className="flex-1 min-h-0">
+                <HistoryTable
+                    history={history}
+                    onUpdate={handleUpdateSpin}
+                    onDelete={handleDeleteSpin}
+                />
+            </div>
           </section>
         </div>
       </div>
@@ -248,12 +312,12 @@ const App: React.FC = () => {
       {/* Footer info */}
       <footer className="mt-12 w-full border-t border-zinc-900 pt-8 pb-12 text-center text-zinc-700">
         <div className="flex flex-wrap justify-center gap-6 text-[10px] font-bold uppercase tracking-[0.2em] mb-4">
-          <span className="text-red-700/80">Red ~48.6%</span>
-          <span className="text-zinc-600">Black ~48.6%</span>
-          <span className="text-green-700/80">Green ~2.7%</span>
+          <span className="text-red-700/80">Red ~46.6%</span>
+          <span className="text-zinc-600">Black ~46.6%</span>
+          <span className="text-green-700/80">Green ~6.6%</span>
         </div>
         <p className="text-[10px] max-w-xs mx-auto opacity-40 leading-relaxed italic">
-          Optimized for Idle Slayer mechanics. The Local Rust Algorithm analyzes local entropy patterns.
+          Optimized for Idle Slayer mechanics (0-14). The Local Rust Algorithm analyzes local entropy patterns.
         </p>
       </footer>
     </div>
