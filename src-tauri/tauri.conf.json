@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Idle_Slayer_Roulette_Predictor",
-  "version": "0.1.0",
+  "productName": "Roulette_Predictor_Idle_Slayer",
+  "version": "0.1.1",
   "identifier": "com.idle-slayer.predictor",
   "build": {
     "beforeDevCommand": "npm run vite",
