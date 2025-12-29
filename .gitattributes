@@ -1,0 +1,4 @@
+# .gitattributes
+src-tauri/icons/*.ico binary
+src-tauri/icons/*.png binary
+src-tauri/icons/*.icns binary
